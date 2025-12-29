@@ -33,7 +33,7 @@ This repository covers topics across software engineering, infrastructure, and d
 - Vector databases and ANN search
 
 ### Programming & Internals
-- Go (primary language)
+- Python (for automations),Go (backend for cloud), Rust (secondary language), Bash(everything else )
 - Concurrency and performance
 - Memory models
 - OS and networking fundamentals
