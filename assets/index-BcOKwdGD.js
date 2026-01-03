@@ -248,24 +248,9 @@ Error generating stack: `+i.message+`
 
 <p>Distributes traffic across multiple backend instances for high availability.</p>
 
-<pre><code class="language-python">class LoadBalancer:
-    """Round-robin load balancer with health checks"""
-    
-    def __init__(self, backends: List[str]):
-        self.backends = backends
-        self.current_index = 0
-        self.healthy_backends = set(backends)
-    
-    def get_backend(self) -> Optional[str]:
-        with self.lock:
-            if not self.healthy_backends:
-                return None
-            
-            healthy_list = list(self.healthy_backends)
-            backend = healthy_list[self.current_index % len(healthy_list)]
-            self.current_index = (self.current_index + 1) % len(healthy_list)
-            return backend
-</code></pre>
+<ul>
+  <li><b>Load Balancer (Round-Robin):</b> Distributes traffic across multiple backend instances for high availability.</li>
+</ul>
 
 <h3>Request Processing Pipeline</h3>
 
