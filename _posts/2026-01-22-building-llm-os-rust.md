@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Building an AI-First Operating System in Rust from Scratch"
-date: 2026-01-22 10:27:00 +0530
+date: 2026-02-15 19:48:00 +0530
 categories: [Rust, AI, Operating Systems]
 tags: [rust, llm, andrej-karpathy, osdev, bare-metal, ai-agent]
 ---

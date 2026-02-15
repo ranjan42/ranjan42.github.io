@@ -2,26 +2,26 @@ export type Category = 'note' | 'deep-dive' | 'project';
 export type Topic = 'SRE' | 'Kubernetes' | 'Databases' | 'System Design' | 'Programming' | 'Cloud';
 
 export interface Post {
-  id: string;
-  title: string;
-  description: string;
-  category: Category;
-  topic: Topic;
-  tags: string[];
-  date: string;
-  content: string; // Markdown or HTML
+    id: string;
+    title: string;
+    description: string;
+    category: Category;
+    topic: Topic;
+    tags: string[];
+    date: string;
+    content: string; // Markdown or HTML
 }
 
 export const posts: Post[] = [
-{
-  id: 'building-llm-os-rust',
-  title: 'Building an AI-First Operating System in Rust from Scratch',
-  description: 'A deep dive into building Andrej Karpathy\'s "LLM OS" concept on bare metal in Rust — mapping context windows to RAM, vector stores to filesystems, and tool calls to syscalls.',
-  category: 'deep-dive',
-  topic: 'Programming',
-  tags: ['Rust', 'AI', 'Operating Systems', 'LLM', 'Bare Metal', 'Andrej Karpathy'],
-  date: '2026-01-22',
-  content: `
+    {
+        id: 'building-llm-os-rust',
+        title: 'Building an AI-First Operating System in Rust from Scratch',
+        description: 'A deep dive into building Andrej Karpathy\'s "LLM OS" concept on bare metal in Rust — mapping context windows to RAM, vector stores to filesystems, and tool calls to syscalls.',
+        category: 'deep-dive',
+        topic: 'Programming',
+        tags: ['Rust', 'AI', 'Operating Systems', 'LLM', 'Bare Metal', 'Andrej Karpathy'],
+        date: '2026-02-15',
+        content: `
 <h2>Building an AI-First Operating System in Rust from Scratch</h2>
 
 <p>What happens when you invert the entire operating system? Instead of a kernel serving human users through a GUI, the kernel serves a single entity — an AI Agent — that <em>is</em> the userland. This is the premise behind Andrej Karpathy's "LLM OS" concept, and in this post, I'll lay out a concrete roadmap for building it from scratch in Rust on bare metal.</p>
@@ -501,16 +501,16 @@ qemu-system-x86_64 -drive format=raw,file=target/x86-64/debug/bootimage-llm-os.b
   <li><a href="https://github.com/dmarro89/go-dav-os">go-dav-os — A freestanding OS kernel in Go</a> (a project I contribute to)</li>
 </ul>
   `
-},
-{
-  id: 'sre-error-budgets',
-  title: 'Implementing Error Budgets: A Practical Guide to SRE',
-  description: 'A comprehensive guide to defining, calculating, and using error budgets to balance reliability and innovation velocity.',
-  category: 'deep-dive',
-  topic: 'SRE',
-  tags: ['SRE', 'Reliability', 'Error Budgets', 'SLO', 'DevOps', 'Production'],
-  date: '2026-01-04',
-  content: `
+    },
+    {
+        id: 'sre-error-budgets',
+        title: 'Implementing Error Budgets: A Practical Guide to SRE',
+        description: 'A comprehensive guide to defining, calculating, and using error budgets to balance reliability and innovation velocity.',
+        category: 'deep-dive',
+        topic: 'SRE',
+        tags: ['SRE', 'Reliability', 'Error Budgets', 'SLO', 'DevOps', 'Production'],
+        date: '2026-01-04',
+        content: `
 <h2>Implementing Error Budgets: A Practical Guide to SRE</h2>
 
 <p>Error budgets are the cornerstone of Site Reliability Engineering (SRE). They provide a data-driven framework for balancing system reliability with innovation velocity. In this deep dive, I'll walk you through implementing error budgets in production systems, from theory to practice.</p>
@@ -900,16 +900,16 @@ groups:
 
 <p><em>Have questions about implementing error budgets in your organization? The patterns and code examples here are battle-tested in production systems handling millions of requests per day.</em></p>
   `
-},
-{
-  id: 'api-gateway-python',
-  title: 'Building a Production-Grade API Gateway in Python',
-  description: 'A comprehensive guide to building an API Gateway with rate limiting, circuit breakers, and load balancing',
-  category: 'deep-dive',
-  topic: 'System Design',
-  tags: ['Python', 'API Gateway', 'Distributed Systems', 'Rate Limiting', 'Circuit Breaker'],
-  date: '2026-01-04',
-  content: `
+    },
+    {
+        id: 'api-gateway-python',
+        title: 'Building a Production-Grade API Gateway in Python',
+        description: 'A comprehensive guide to building an API Gateway with rate limiting, circuit breakers, and load balancing',
+        category: 'deep-dive',
+        topic: 'System Design',
+        tags: ['Python', 'API Gateway', 'Distributed Systems', 'Rate Limiting', 'Circuit Breaker'],
+        date: '2026-01-04',
+        content: `
 <h2>Building a Production-Grade API Gateway in Python</h2>
 
 <p>As microservices architecture continues to dominate modern software development, the API Gateway has become a critical component in distributed systems. In this post, I'll walk you through building a production-grade API Gateway in Python, covering essential patterns like rate limiting, circuit breakers, and load balancing.</p>
@@ -1111,16 +1111,16 @@ response = gateway.handle_request(request)
 
 <p>The complete source code demonstrates essential patterns like rate limiting (token bucket algorithm), circuit breakers (fault tolerance), round-robin load balancing, and token-based authentication - all implemented with thread-safe operations and zero external dependencies.</p>
   `
-},
-{
-  id: 'lc3-vm-rust',
-  title: 'Building an LC-3 Virtual Machine in Rust: A Deep Dive into Systems Programming',
-  description: 'A comprehensive guide to implementing a complete virtual machine in Rust, exploring pattern matching, memory safety, low-level programming, and error handling.',
-  category: 'deep-dive',
-  topic: 'Programming',
-  tags: ['Rust', 'Virtual Machines', 'Systems Programming', 'Computer Architecture', 'Low-Level'],
-  date: '2026-01-05',
-  content: `
+    },
+    {
+        id: 'lc3-vm-rust',
+        title: 'Building an LC-3 Virtual Machine in Rust: A Deep Dive into Systems Programming',
+        description: 'A comprehensive guide to implementing a complete virtual machine in Rust, exploring pattern matching, memory safety, low-level programming, and error handling.',
+        category: 'deep-dive',
+        topic: 'Programming',
+        tags: ['Rust', 'Virtual Machines', 'Systems Programming', 'Computer Architecture', 'Low-Level'],
+        date: '2026-01-05',
+        content: `
 <h2>Building an LC-3 Virtual Machine in Rust: A Deep Dive into Systems Programming</h2>
 
 <p>Virtual machines and CPU emulation are fascinating topics that sit at the intersection of computer architecture and systems programming. In this deep dive, I'll walk you through building a complete LC-3 virtual machine in Rust—a journey that will teach you fundamental concepts about how computers work while showcasing powerful Rust features.</p>
@@ -1682,5 +1682,5 @@ cargo build --release
 
 <p><em>The complete source code with all 16 instructions, TRAP routines, and comprehensive error handling is available in the lc3-vm-rust directory. Clone it, build it, and run some LC-3 programs to see a real virtual machine in action.</em></p>
   `
-}
+    }
 ];
