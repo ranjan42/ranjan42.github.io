@@ -14,6 +14,495 @@ export interface Post {
 
 export const posts: Post[] = [
 {
+  id: 'building-llm-os-rust',
+  title: 'Building an AI-First Operating System in Rust from Scratch',
+  description: 'A deep dive into building Andrej Karpathy\'s "LLM OS" concept on bare metal in Rust — mapping context windows to RAM, vector stores to filesystems, and tool calls to syscalls.',
+  category: 'deep-dive',
+  topic: 'Programming',
+  tags: ['Rust', 'AI', 'Operating Systems', 'LLM', 'Bare Metal', 'Andrej Karpathy'],
+  date: '2026-01-22',
+  content: `
+<h2>Building an AI-First Operating System in Rust from Scratch</h2>
+
+<p>What happens when you invert the entire operating system? Instead of a kernel serving human users through a GUI, the kernel serves a single entity — an AI Agent — that <em>is</em> the userland. This is the premise behind Andrej Karpathy's "LLM OS" concept, and in this post, I'll lay out a concrete roadmap for building it from scratch in Rust on bare metal.</p>
+
+<p>This isn't a toy project. It's a design exercise that forces you to rethink every layer of the stack: memory management becomes context window management, the filesystem becomes a vector store, and system calls become tool invocations.</p>
+
+<h3>Why Rust?</h3>
+
+<p>Before diving in, the language choice deserves a brief justification:</p>
+
+<ul>
+  <li><strong>No garbage collector.</strong> You cannot afford GC pauses when you're managing interrupt handlers and DMA buffers.</li>
+  <li><strong>Zero-cost abstractions.</strong> Traits, generics, and ownership give you high-level ergonomics without runtime overhead.</li>
+  <li><strong><code>#![no_std]</code> ecosystem.</strong> Rust has first-class support for freestanding binaries. Crates like <code>bootloader</code>, <code>x86_64</code>, <code>volatile</code>, and <code>linked_list_allocator</code> mean you aren't reinventing every wheel.</li>
+  <li><strong>Memory safety at compile time.</strong> In kernel development, a use-after-free isn't a segfault — it's silent memory corruption that surfaces hours later. Rust eliminates this class of bugs entirely.</li>
+</ul>
+
+<h3>The Karpathy LLM OS Architecture</h3>
+
+<p>Karpathy's insight is deceptively simple: map every traditional OS concept to its LLM equivalent.</p>
+
+<table>
+  <thead><tr><th>Traditional OS</th><th>LLM OS Equivalent</th></tr></thead>
+  <tbody>
+    <tr><td>CPU</td><td>The Large Language Model — processes tokens instead of machine instructions</td></tr>
+    <tr><td>RAM</td><td>Context Window — fast, volatile working memory for the current reasoning chain</td></tr>
+    <tr><td>Disk / Filesystem</td><td>RAG + Embeddings — long-term memory stored as vectors, retrieved by semantic similarity</td></tr>
+    <tr><td>Processes</td><td>Agents / Tool-use threads — concurrent reasoning chains</td></tr>
+    <tr><td>System Calls</td><td>Tool Invocations — the agent "calls" a calculator, a Python interpreter, or a web search</td></tr>
+    <tr><td>Peripherals</td><td>Multimodal I/O — microphone (speech-to-text), camera (vision embeddings), display (rendered output)</td></tr>
+    <tr><td>Scheduler</td><td>Orchestrator — decides which agent gets the next inference cycle</td></tr>
+  </tbody>
+</table>
+
+<p>The key shift: in a traditional OS, the human is the "outer loop" and the CPU is the "inner loop." In the LLM OS, the <strong>agent is the outer loop</strong> and the hardware is just infrastructure.</p>
+
+<h3>Phase 1: The Bare-Metal Rust Kernel</h3>
+
+<p>Since we're building from scratch, we can't use Rust's standard library (<code>std</code>) — it depends on an existing OS for threads, file I/O, and memory allocation. Everything starts with a <code>#![no_std]</code> freestanding binary.</p>
+
+<p>I recommend following the bootloader methodology from Philipp Oppermann's excellent <a href="https://os.phil-opp.com/">Writing an OS in Rust</a> series, adapted for our AI-first architecture.</p>
+
+<h4>1.1 The Entry Point</h4>
+
+<pre><code class="language-rust">#![no_std]
+#![no_main]
+
+use core::panic::PanicInfo;
+use bootloader::{entry_point, BootInfo};
+
+entry_point!(kernel_main);
+
+fn kernel_main(boot_info: &'static BootInfo) -> ! {
+    // Phase 1: Hardware foundation
+    gdt::init();                    // Global Descriptor Table
+    interrupts::init_idt();         // Interrupt Descriptor Table
+    unsafe { interrupts::PICS.lock().initialize() };
+    x86_64::instructions::interrupts::enable();
+
+    // Phase 2: Memory subsystem
+    let phys_mem_offset = VirtAddr::new(
+        boot_info.physical_memory_offset.into_option().unwrap()
+    );
+    let mut mapper = unsafe { memory::init(phys_mem_offset) };
+    let mut frame_allocator = unsafe {
+        memory::BootInfoFrameAllocator::init(&boot_info.memory_map)
+    };
+    allocator::init_heap(&mut mapper, &mut frame_allocator)
+        .expect("heap initialization failed");
+
+    // Phase 3: Boot the Agent
+    agent::init();
+
+    // Halt loop — interrupts will wake us
+    loop {
+        x86_64::instructions::hlt();
+    }
+}
+
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    serial_println!("KERNEL PANIC: {}", info);
+    loop { x86_64::instructions::hlt(); }
+}
+</code></pre>
+
+<p><strong>What's happening here:</strong> We initialize the CPU's descriptor tables, set up interrupt handling (so the keyboard, timer, and network card can talk to us), bring up virtual memory with paging, carve out a heap so we can use <code>alloc::Vec</code> and <code>alloc::String</code>, and finally hand control to the agent.</p>
+
+<h4>1.2 Memory Management</h4>
+
+<p>The heap allocator is critical. We need dynamic allocation for the agent's context window, token buffers, and embedding vectors:</p>
+
+<pre><code class="language-rust">use linked_list_allocator::LockedHeap;
+
+#[global_allocator]
+static ALLOCATOR: LockedHeap = LockedHeap::empty();
+
+pub const HEAP_START: usize = 0x_4444_4444_0000;
+pub const HEAP_SIZE: usize = 1024 * 1024; // 1 MiB initial heap
+
+pub fn init_heap(
+    mapper: &mut impl Mapper&lt;Size4KiB&gt;,
+    frame_allocator: &mut impl FrameAllocator&lt;Size4KiB&gt;,
+) -> Result&lt;(), MapToError&lt;Size4KiB&gt;&gt; {
+    let page_range = {
+        let heap_start = VirtAddr::new(HEAP_START as u64);
+        let heap_end = heap_start + HEAP_SIZE - 1u64;
+        Page::range_inclusive(
+            Page::containing_address(heap_start),
+            Page::containing_address(heap_end),
+        )
+    };
+
+    for page in page_range {
+        let frame = frame_allocator
+            .allocate_frame()
+            .ok_or(MapToError::FrameAllocationFailed)?;
+        let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
+        unsafe { mapper.map_to(page, frame, flags, frame_allocator)?.flush(); }
+    }
+
+    unsafe { ALLOCATOR.lock().init(HEAP_START as *mut u8, HEAP_SIZE); }
+    Ok(())
+}
+</code></pre>
+
+<h4>1.3 Driver Layer</h4>
+
+<p>At minimum, we need three drivers to make the agent functional:</p>
+
+<table>
+  <thead><tr><th>Driver</th><th>Purpose</th><th>Why the Agent Needs It</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Serial/UART</strong></td><td>Text I/O over COM port</td><td>Debugging + basic agent output before display driver is ready</td></tr>
+    <tr><td><strong>Network (virtio-net)</strong></td><td>TCP/IP stack</td><td>Agent must reach an LLM inference API (or run inference locally)</td></tr>
+    <tr><td><strong>Disk (virtio-blk / ATA)</strong></td><td>Persistent storage</td><td>RAG vector store, conversation logs, embeddings</td></tr>
+  </tbody>
+</table>
+
+<p>The network driver is the most critical — without it, the agent can't think.</p>
+
+<h3>Phase 2: The Agent Runtime</h3>
+
+<p>This is where traditional OS development diverges. Instead of building a shell for a human user, we build a runtime for an AI agent.</p>
+
+<h4>2.1 The Agent Core</h4>
+
+<pre><code class="language-rust">pub struct Agent {
+    context_window: ContextWindow,
+    tool_registry: ToolRegistry,
+    memory_store: VectorStore,
+    inference_client: InferenceClient,
+    orchestrator: Orchestrator,
+}
+
+impl Agent {
+    pub fn init() -> Self {
+        let mut agent = Agent {
+            context_window: ContextWindow::new(MAX_TOKENS),
+            tool_registry: ToolRegistry::new(),
+            memory_store: VectorStore::new(),
+            inference_client: InferenceClient::connect("inference-server:8080"),
+            orchestrator: Orchestrator::new(),
+        };
+
+        // Register built-in tools
+        agent.tool_registry.register("calculator", tools::calculator);
+        agent.tool_registry.register("web_search", tools::web_search);
+        agent.tool_registry.register("read_file", tools::read_file);
+        agent.tool_registry.register("write_file", tools::write_file);
+        agent.tool_registry.register("run_code", tools::run_code);
+        agent.tool_registry.register("memory_store", tools::memory_store);
+        agent.tool_registry.register("memory_recall", tools::memory_recall);
+
+        agent.run_loop();
+        agent
+    }
+
+    fn run_loop(&mut self) -> ! {
+        loop {
+            // 1. Gather input (interrupts, network messages, timers)
+            let input = self.orchestrator.next_input();
+
+            // 2. Build prompt with context
+            self.context_window.push_message(Role::User, &input);
+            let prompt = self.context_window.serialize();
+
+            // 3. Run inference
+            let response = self.inference_client.complete(&prompt);
+
+            // 4. Parse and execute tool calls
+            if let Some(tool_calls) = response.tool_calls() {
+                for call in tool_calls {
+                    let result = self.tool_registry.execute(&call.name, &call.args);
+                    self.context_window.push_message(Role::Tool, &result);
+                }
+                continue; // Re-run inference with tool results
+            }
+
+            // 5. Output response
+            self.context_window.push_message(Role::Assistant, &response.text);
+            self.orchestrator.emit_output(&response.text);
+        }
+    }
+}
+</code></pre>
+
+<h4>2.2 Context Window as RAM</h4>
+
+<p>The context window is the agent's working memory. Unlike traditional RAM that stores arbitrary bytes, it stores a structured sequence of messages (tokens). Managing it well is the difference between a useful agent and one that forgets what it was doing:</p>
+
+<pre><code class="language-rust">pub struct ContextWindow {
+    messages: VecDeque&lt;Message&gt;,
+    max_tokens: usize,
+    current_tokens: usize,
+}
+
+impl ContextWindow {
+    pub fn push_message(&mut self, role: Role, content: &str) {
+        let token_count = tokenize(content).len();
+
+        // Eviction policy: drop oldest non-system messages when full
+        while self.current_tokens + token_count > self.max_tokens {
+            if let Some(evicted) = self.evict_oldest() {
+                self.summarize_and_store(&evicted);
+            } else {
+                break; // Only system prompt remains
+            }
+        }
+
+        self.messages.push_back(Message { role, content: content.into() });
+        self.current_tokens += token_count;
+    }
+
+    fn evict_oldest(&mut self) -> Option&lt;Message&gt; {
+        if self.messages.len() <= 1 { return None; }
+        let msg = self.messages.remove(1)?;
+        self.current_tokens -= tokenize(&msg.content).len();
+        Some(msg)
+    }
+
+    fn summarize_and_store(&self, message: &Message) {
+        // Compress evicted context into long-term memory (RAG store)
+        // This is the "swap to disk" equivalent
+    }
+}
+</code></pre>
+
+<p><strong>The analogy is precise:</strong> when RAM is full, the OS pages data to disk. When the context window is full, the agent summarizes old messages and stores them in the vector database. Retrieval-Augmented Generation is literally virtual memory for LLMs.</p>
+
+<h4>2.3 Tool Invocations as System Calls</h4>
+
+<p>In a traditional OS, user programs make system calls (<code>read()</code>, <code>write()</code>, <code>fork()</code>) to request kernel services. In the LLM OS, the agent makes <strong>tool calls</strong> to interact with the outside world:</p>
+
+<pre><code class="language-rust">pub struct ToolRegistry {
+    tools: BTreeMap&lt;String, Box&lt;dyn Tool&gt;&gt;,
+}
+
+pub trait Tool: Send + Sync {
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn execute(&self, args: &Value) -> Result&lt;String, ToolError&gt;;
+}
+
+// Example: Calculator tool
+pub struct Calculator;
+
+impl Tool for Calculator {
+    fn name(&self) -> &str { "calculator" }
+    fn description(&self) -> &str {
+        "Evaluate a mathematical expression. Input: {\\"expr\\": \\"2 + 2 * 3\\"}"
+    }
+    fn execute(&self, args: &Value) -> Result&lt;String, ToolError&gt; {
+        let expr = args["expr"].as_str().ok_or(ToolError::InvalidArgs)?;
+        let result = eval_math(expr)?;
+        Ok(format!("{}", result))
+    }
+}
+</code></pre>
+
+<p>The tool registry is functionally equivalent to a syscall table. The agent's output is parsed for structured tool-call tokens, the kernel dispatches to the appropriate handler, and the result is fed back into the next inference cycle.</p>
+
+<h3>Phase 3: Long-Term Memory (The Vector Filesystem)</h3>
+
+<p>A traditional filesystem organizes data by path (<code>/home/user/notes.txt</code>). The LLM OS organizes data by <strong>semantic similarity</strong> — you don't look up a file by name, you describe what you're looking for and the system retrieves the most relevant chunks.</p>
+
+<h4>3.1 The Vector Store</h4>
+
+<pre><code class="language-rust">pub struct VectorStore {
+    entries: Vec&lt;MemoryEntry&gt;,
+}
+
+pub struct MemoryEntry {
+    pub id: u64,
+    pub content: String,
+    pub embedding: Vec&lt;f32&gt;,    // 1536-dim for text-embedding-ada-002
+    pub metadata: Metadata,
+    pub timestamp: u64,
+}
+
+impl VectorStore {
+    pub fn store(&mut self, content: &str, embedding: Vec&lt;f32&gt;) {
+        let entry = MemoryEntry {
+            id: self.next_id(),
+            content: content.into(),
+            embedding,
+            metadata: Metadata::default(),
+            timestamp: crate::time::now(),
+        };
+        self.entries.push(entry);
+    }
+
+    pub fn recall(&self, query_embedding: &[f32], top_k: usize) -> Vec&lt;&MemoryEntry&gt; {
+        let mut scored: Vec&lt;_&gt; = self.entries.iter()
+            .map(|entry| {
+                let similarity = cosine_similarity(&entry.embedding, query_embedding);
+                (entry, similarity)
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        scored.into_iter().take(top_k).map(|(entry, _)| entry).collect()
+    }
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let mag_a: f32 = a.iter().map(|x| x * x).sum::&lt;f32&gt;().sqrt();
+    let mag_b: f32 = b.iter().map(|x| x * x).sum::&lt;f32&gt;().sqrt();
+    if mag_a == 0.0 || mag_b == 0.0 { return 0.0; }
+    dot / (mag_a * mag_b)
+}
+</code></pre>
+
+<h4>3.2 Memory Hierarchy</h4>
+
+<p>Just like a CPU has L1/L2/L3 caches, RAM, and disk, the LLM OS has a memory hierarchy:</p>
+
+<pre><code>┌───────────────────────────────┐
+│  System Prompt (always in     │  ← "L1 Cache" — never evicted
+│  context, ~500 tokens)        │
+├───────────────────────────────┤
+│  Recent Messages              │  ← "RAM" — the context window
+│  (up to max_tokens)           │
+├───────────────────────────────┤
+│  Summarized History           │  ← "L2 Cache" — compressed summaries
+│  (retrieved on demand)        │    of evicted conversations
+├───────────────────────────────┤
+│  Vector Store (RAG)           │  ← "Disk" — all past knowledge,
+│  (semantic retrieval)         │    retrieved by similarity search
+├───────────────────────────────┤
+│  External APIs                │  ← "Network" — web search, databases,
+│  (tool calls)                 │    live data from the outside world
+└───────────────────────────────┘
+</code></pre>
+
+<p>This hierarchy enables the agent to have effectively <strong>infinite memory</strong> while operating within a fixed context window. The cost model mirrors hardware: "closer" memory is faster (no extra inference) but limited; "farther" memory has higher latency (requires a retrieval step) but is unbounded.</p>
+
+<h3>Phase 4: The Orchestrator (Scheduler)</h3>
+
+<p>A traditional OS scheduler multiplexes CPU time across processes. The LLM OS orchestrator multiplexes <strong>inference cycles</strong> across tasks:</p>
+
+<pre><code class="language-rust">pub struct Orchestrator {
+    task_queue: VecDeque&lt;Task&gt;,
+    active_task: Option&lt;Task&gt;,
+    interrupt_handlers: BTreeMap&lt;InterruptType, fn(&str) -> Task&gt;,
+}
+
+pub struct Task {
+    pub id: u64,
+    pub priority: Priority,
+    pub description: String,
+    pub status: TaskStatus,
+}
+
+impl Orchestrator {
+    pub fn next_input(&mut self) -> String {
+        // Check for hardware interrupts (keyboard, network, timer)
+        if let Some(interrupt) = self.poll_interrupts() {
+            return self.handle_interrupt(interrupt);
+        }
+
+        // Check task queue
+        if let Some(task) = self.task_queue.pop_front() {
+            self.active_task = Some(task.clone());
+            return task.description;
+        }
+
+        // Idle — agent can do background work
+        "No pending tasks. Perform memory consolidation or await input.".into()
+    }
+}
+</code></pre>
+
+<p><strong>Interesting design question:</strong> Should the orchestrator support preemption? In a traditional OS, the timer interrupt preempts a running process. In the LLM OS, you could interrupt a long reasoning chain if a higher-priority task arrives — but you'd need to save and restore the context window state, which is expensive.</p>
+
+<h3>Phase 5: Multimodal I/O (Peripherals)</h3>
+
+<p>The final layer connects the agent to the physical world:</p>
+
+<table>
+  <thead><tr><th>Peripheral</th><th>Traditional OS</th><th>LLM OS</th></tr></thead>
+  <tbody>
+    <tr><td>Keyboard</td><td>Key codes → stdin</td><td>Key codes → tokenizer → agent input</td></tr>
+    <tr><td>Display</td><td>Framebuffer → pixels</td><td>Agent output → renderer → framebuffer</td></tr>
+    <tr><td>Microphone</td><td>PCM audio → /dev/audio</td><td>PCM audio → Whisper → tokens → agent input</td></tr>
+    <tr><td>Camera</td><td>Raw frames → /dev/video</td><td>Raw frames → CLIP/Vision → embeddings → agent input</td></tr>
+    <tr><td>Network</td><td>Packets → TCP/IP stack</td><td>Packets → tool results / inference API</td></tr>
+  </tbody>
+</table>
+
+<p>The display driver is particularly interesting. The agent doesn't "print to stdout" — it emits structured output (markdown, HTML, SVG) that a rendering engine converts to pixels on the framebuffer. The agent is effectively its own window manager.</p>
+
+<h3>The Complete Boot Sequence</h3>
+
+<pre><code> 1. BIOS/UEFI → Bootloader (GRUB/bootloader crate)
+ 2. Bootloader → kernel_main()
+ 3. GDT, IDT, PIC initialization
+ 4. Page table setup, heap allocation
+ 5. Serial driver init (early debug output)
+ 6. Network driver init (virtio-net or e1000)
+ 7. Disk driver init (virtio-blk or ATA)
+ 8. Vector store loaded from disk
+ 9. Agent::init()
+    ├── ContextWindow created (system prompt loaded)
+    ├── ToolRegistry populated
+    ├── InferenceClient connected
+    └── Agent enters run_loop()
+10. Agent is now "alive" — waiting for input
+</code></pre>
+
+<p>From step 10 onward, the agent is in control. It processes inputs, reasons about them, calls tools, and emits outputs. The kernel is invisible — it just keeps the hardware humming.</p>
+
+<h3>Open Questions and Future Work</h3>
+
+<ol>
+  <li><strong>Where does inference run?</strong> On-device (requires GPU driver + CUDA/ROCm in kernel space) or off-device (requires only a network stack, but adds latency)?</li>
+  <li><strong>Multi-agent scheduling.</strong> Can we run multiple agents concurrently, each with their own context window, and have the orchestrator schedule inference cycles across them?</li>
+  <li><strong>Security model.</strong> In a traditional OS, rings and page tables isolate processes. How do you isolate agents from each other? Tool-call permissions? Context window sandboxing?</li>
+  <li><strong>Self-modification.</strong> The agent could theoretically modify its own system prompt, tool registry, or even kernel code. Should this be allowed? What guardrails are needed?</li>
+  <li><strong>Persistence and crash recovery.</strong> If the system crashes mid-inference, how do you restore the agent's state? The context window needs checkpointing, similar to process core dumps.</li>
+</ol>
+
+<h3>Getting Started</h3>
+
+<pre><code class="language-bash"># Install Rust nightly (required for #![no_std] kernel dev)
+rustup install nightly
+rustup component add rust-src --toolchain nightly
+rustup component add llvm-tools-preview --toolchain nightly
+
+# Install bootimage tool
+cargo install bootimage
+
+# Create the project
+cargo new llm-os --edition 2021
+cd llm-os
+
+# Run with QEMU
+cargo bootimage
+qemu-system-x86_64 -drive format=raw,file=target/x86-64/debug/bootimage-llm-os.bin
+</code></pre>
+
+<p>Start with Oppermann's tutorials for the kernel foundation, then diverge at the point where you'd normally build a shell — build the agent runtime instead.</p>
+
+<h3>Conclusion</h3>
+
+<p>The LLM OS isn't science fiction. Every component I've described maps to well-understood systems programming concepts. The context window is RAM with an eviction policy. The vector store is a content-addressed filesystem. Tool calls are system calls. The orchestrator is a scheduler.</p>
+
+<p>What makes it exciting is the <em>inversion</em>: the AI isn't a program running on the OS — the AI <strong>is</strong> the OS. Every design decision flows from that single architectural choice.</p>
+
+<p>The full source code will be published on <a href="https://github.com/ranjan42">GitHub</a> as the project matures. If you're interested in OS development, AI systems, or Rust, I'd love to hear from you.</p>
+
+<p><em>Further reading:</em></p>
+<ul>
+  <li><a href="https://os.phil-opp.com/">Writing an OS in Rust — Philipp Oppermann</a></li>
+  <li><a href="https://docs.rust-embedded.org/book/">The Rust <code>#![no_std]</code> Book</a></li>
+  <li><a href="https://github.com/dmarro89/go-dav-os">go-dav-os — A freestanding OS kernel in Go</a> (a project I contribute to)</li>
+</ul>
+  `
+},
+{
   id: 'sre-error-budgets',
   title: 'Implementing Error Budgets: A Practical Guide to SRE',
   description: 'A comprehensive guide to defining, calculating, and using error budgets to balance reliability and innovation velocity.',
